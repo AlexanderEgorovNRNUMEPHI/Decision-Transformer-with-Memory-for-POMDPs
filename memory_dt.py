@@ -1,11 +1,10 @@
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import os
 from tqdm import tqdm
-import gymnasium as gym
+import pandas as pd
 
 from pomdp_envs.velocity_cartpole import VelocityCartPoleEnv
 from pomdp_envs.flickering_pendulum import FlickeringPendulumEnv
@@ -120,6 +119,7 @@ class MemoryDecisionTransformer(nn.Module):
         self.n_embed = n_embed
         self.context_length = context_length
         self.memory_type = memory_type
+        self.memory_dim = memory_dim
         
         # (R,o,a) encoders
         self.state_encoder = nn.Linear(state_dim, n_embed)
@@ -130,10 +130,10 @@ class MemoryDecisionTransformer(nn.Module):
         
         # Memory module (optional)
         if memory_type == 'gru':
-            # TODO: Implement GRU memory
+            self.memory = nn.GRU(input_size=n_embed, hidden_size=memory_dim, batch_first=True )
             self.memory_proj = nn.Linear(memory_dim, n_embed)
         elif memory_type == 'lstm':
-            # TODO: Implement LSTM memory
+            self.memory = nn.LSTM(input_size=n_embed, hidden_size=memory_dim, batch_first=True )
             self.memory_proj = nn.Linear(memory_dim, n_embed)
         else:
             self.memory = None
@@ -185,12 +185,16 @@ class MemoryDecisionTransformer(nn.Module):
         if self.memory is not None:
             if self.memory_type == 'gru':
                 if self.hidden_state is None:
-                    # TODO: Implement GRU memory
-                
+                    self.hidden_state = torch.zeros(
+                        1, batch_size, self.memory_dim, device=states.device, dtype=torch.float32
+                    )
+        
                 memory_out, self.hidden_state = self.memory(state_embeddings, self.hidden_state)
             elif self.memory_type == 'lstm':
                 if self.hidden_state is None:
-                    # TODO: Implement LSTM memory
+                    h = torch.zeros(1, batch_size, self.memory_dim, device=states.device, dtype=torch.float32)
+                    c = torch.zeros(1, batch_size, self.memory_dim, device=states.device, dtype=torch.float32)
+                    self.hidden_state = (h, c)
                 
                 memory_out, self.hidden_state = self.memory(state_embeddings, self.hidden_state)
             
@@ -545,7 +549,8 @@ def train_memory_dt(
     
     # save best model
     os.makedirs('models', exist_ok=True)
-    best_model_path = f"models/memory_dt_{env_name}_{memory_type}_best.pt"
+    adder = 80
+    best_model_path = f"models/memory_dt_{env_name}_{memory_type}_best_{adder}.pt"
     torch.save(best_model_state if best_model_state else model.state_dict(), best_model_path)
     print(f"Best model saved to {best_model_path}")
     
@@ -570,8 +575,15 @@ def train_memory_dt(
     plt.ylabel('Mean Return')
     
     plt.tight_layout()
-    plt.savefig(f"models/memory_dt_{env_name}_{memory_type}_training.png")
+    plt.savefig(f"models/memory_dt_{env_name}_{memory_type}_training_{adder}.png")
     plt.close()
+
+    result = pd.DataFrame({
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'val_returns': val_returns
+    })
+    result.to_csv(f"models/memory_dt_{env_name}_{memory_type}_training_{adder}.csv", index=False)
     
     return model, train_losses, val_returns
 
